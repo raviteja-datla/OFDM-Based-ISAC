@@ -116,11 +116,13 @@ this has to be a separate grid, not the sensing grid reused)
 different conditions: once for the single validation run (`run_single_validation`), once with
 `demo_targets` + CFAR for the multi-target demo (`run_multi_target_demo`), once across
 `trajectory_n_frames` consecutive frames for the trajectory-tracking demo
-(`run_trajectory_demo` — see §5's `trajectory_tracking.png` section), and `n_monte_carlo`
-times per SNR point for the RMSE and BER sweeps (`run_rmse_vs_snr`, `run_ber_vs_snr`).
+(`run_trajectory_demo` — see §5's `trajectory_tracking.png` section), once across
+`micro_doppler_n_frames` frames for the micro-Doppler demo (`run_micro_doppler_demo` — see
+§5's `micro_doppler_spectrogram.png` section), and `n_monte_carlo` times per SNR point for the
+RMSE and BER sweeps (`run_rmse_vs_snr`, `run_ber_vs_snr`).
 
 **6. Plotting — [`plotting.py`](src/ofdm_isac/plotting.py)** turns each experiment's returned
-dict into one of the six PNGs in `results/`.
+dict into one of the seven PNGs in `results/`.
 
 **7. [`main.py`](main.py)** sequences all of the above in order and prints the derived
 numbers plus a couple of headline results to the console.
@@ -145,7 +147,7 @@ src/ofdm_isac/
                      single-target peak detection + multi-target CA-CFAR detection
   comms_rx.py      equalization, QAM demod, BER, theoretical AWGN BER curve
   experiments.py   the Monte Carlo experiments (validation run, multi-target demo,
-                     trajectory-tracking demo, RMSE sweep, BER sweep)
+                     trajectory-tracking demo, micro-Doppler demo, RMSE sweep, BER sweep)
   plotting.py      the deliverable figures
 ```
 
@@ -172,8 +174,8 @@ python main.py
 
 This prints the system's derived numbers (bandwidth, range/velocity resolution, unambiguous
 limits), runs the single-target validation pass, the multi-target CFAR demo, the trajectory-
-tracking demo, then two Monte Carlo sweeps, and saves six PNGs to `results/`. Takes about 30
-seconds.
+tracking demo, the micro-Doppler demo, then two Monte Carlo sweeps, and saves seven PNGs to
+`results/`. Takes about 35 seconds.
 
 ---
 
@@ -251,9 +253,36 @@ line — each flat plateau is the estimate sitting in one range bin (`ΔR ≈ 9.
 to the next as the target physically crosses that boundary, a direct, visual demonstration of
 range quantization that's easy to miss in a single static snapshot. The **velocity track stays
 essentially flat and accurate throughout** (RMSE well under `Δv`), because velocity here is
-genuinely constant — a non-constant real target (accelerating, or with body-part-level
-micro-motion, like a person's gait) would show up as texture on top of this track, which this
-project doesn't model (see §8).
+genuinely constant — a target with non-constant velocity is exactly what the next demo covers.
+
+### `micro_doppler_spectrogram.png` — a stationary target's periodic motion
+
+This project started from an ISAC angle — one waveform doing radar and comms — but the
+same underlying trick (compare received to known-transmitted, look at what's left) is also
+the mechanism behind **WiFi sensing** (IEEE 802.11bf), where a repurposed comms signal detects
+human presence, gestures, or breathing by watching how the channel fluctuates over time. This
+demo is the bridge between the two: `experiments.run_micro_doppler_demo` simulates a
+*stationary* body (fixed range, zero net translation) whose instantaneous velocity oscillates —
+`v(t) = bulk + amplitude·sin(2π·freq·t)` — modeling something like a repeated gesture or limb
+swing rather than bulk motion. Because real micro-motion frequencies (~1–2 Hz) are far slower
+than one OFDM frame's duration (a few ms), each individual frame's constant-velocity assumption
+stays physically valid; the oscillation only becomes visible by stacking many frames' Doppler
+profiles into a spectrogram.
+
+No new sensing algorithm is needed for this — `range_doppler_map` already computes a full
+Doppler profile (magnitude across the velocity axis) per frame. This demo simply keeps that
+whole profile, evaluated at the target's fixed range bin, instead of collapsing it to one number
+via `find_peak`, and stacks those profiles across `micro_doppler_n_frames` (600, by default) as
+columns of an image — velocity axis vs. frame time. The result is a proper **micro-Doppler
+spectrogram**: the oscillating limb/gesture traces a wavy bright band instead of a straight line.
+
+The demo closes the loop the same way everything else in this project verifies its own claims:
+it also runs a second, slower FFT — literally the real technique, not a simplification of it —
+across the recovered per-frame velocity estimates, and recovers the oscillation frequency itself
+(printed to console, and in the plot title: true vs. recovered). The two won't match exactly —
+frequency resolution here is `1/(micro_doppler_n_frames × frame_duration_s)`, about 0.35 Hz at
+the defaults — but landing in the right bin is the same bin-quantization story that shows up
+everywhere else in this project (RMSE floors, range staircases), not a new kind of error.
 
 ### `rmse_vs_snr.png`
 Two subplots: range estimation RMSE and velocity estimation RMSE, each swept over SNR, each with
@@ -314,6 +343,17 @@ combinations raise `ValueError` at construction time (`__post_init__`), not part
 | `trajectory_start_range_m`, `trajectory_velocity_mps` | 100 m, 50 m/s | The start position and (constant) velocity. Both the start *and* end-of-trajectory range (`start + velocity × n_frames × frame_duration_s`) are validated against `max_unambiguous_range_m`/`max_unambiguous_velocity_mps` — a trajectory that would drift past the unambiguous range partway through is rejected at construction time, not partway through a run. |
 | `trajectory_n_frames` | 200 | How many independent frames to track across. More frames → longer observed trajectory (`n_frames × frame_duration_s`) and more visible range-bin transitions in the plot; linearly more runtime (one full sensing pipeline pass per frame). |
 | `trajectory_snr_db` | 20 dB | SNR for every frame in the sweep. Lower it to see the per-frame range/velocity scatter widen around the true track — the single-frame analog of the RMSE-vs-SNR sweep, but visualized as a track instead of an aggregate statistic. |
+
+### Micro-Doppler demo — drives `micro_doppler_spectrogram.png`
+
+| Field | Default | Notes |
+|---|---|---|
+| `micro_doppler_range_m` | 200 m | Fixed range — this target has zero net translation, only oscillatory motion, so range doesn't need per-frame validation the way the trajectory demo's does. |
+| `micro_doppler_bulk_velocity_mps` | 0.0 | Constant component of velocity, e.g. non-zero to model a body walking *while* gesturing. Kept at 0 by default to isolate the oscillation cleanly rather than compounding it with the range-staircase effect already shown in `trajectory_tracking.png`. |
+| `micro_doppler_amplitude_mps` | 3.0 m/s | Peak oscillation amplitude. Needs to be large relative to `velocity_resolution_mps` (~1.12 m/s) to show up clearly in the spectrogram — this is roughly limb-swing scale; something breathing-scale (mm/s) would be far below this system's velocity resolution and invisible. |
+| `micro_doppler_freq_hz` | 1.5 Hz | Oscillation rate (roughly gesture/limb-swing cadence). Higher → faster wobble in the spectrogram; must stay well below `1/(2·frame_duration_s)` for the per-frame constant-velocity assumption to hold (trivially true at human motion rates here). |
+| `micro_doppler_n_frames` | 600 | Total observation length. More frames → finer frequency resolution in the recovered-oscillation-frequency FFT (`1/(n_frames × frame_duration_s)`) and more visible oscillation cycles in the plot; linearly more runtime. |
+| `micro_doppler_snr_db` | 20 dB | SNR for every frame. Lower it to see the bright band in the spectrogram widen/fade and the recovered oscillation frequency degrade. |
 
 ### CA-CFAR detector — drives what counts as a "detection" in `cfar_detect_2d`
 
@@ -385,8 +425,15 @@ and look at the output —
   is bin-quantization-limited as a result.
 - **Angle of arrival.** Everything here is single-antenna, so range and radial velocity are all
   that's recoverable — no bearing/direction, which would need a receive antenna array.
-- **Micro-Doppler / non-constant motion.** `trajectory_tracking.png` (§5) tracks a single
-  constant-velocity target across frames — real motion (acceleration, or body-part-level
-  micro-motion like gait or breathing, the actual mechanism behind WiFi/radar human sensing)
-  would need a non-constant velocity model and a second, slower FFT across many frames
-  (a spectrogram) to reveal it, neither of which this project builds.
+- **Multi-scatterer bodies and acceleration.** `micro_doppler_spectrogram.png` models one point
+  target with a single sinusoidal velocity component. A real body's micro-Doppler signature
+  comes from *multiple* scattering points (torso + swinging limbs) moving at different rates
+  simultaneously (a real gait spectrogram shows several superimposed oscillations, not one),
+  and a real trajectory can accelerate rather than move at constant velocity — both would be
+  straightforward extensions of the existing `Target` superposition (§2 step 2) and per-frame
+  velocity model already in place, just not built here.
+- **Breathing-scale motion.** `micro_doppler_amplitude_mps` is deliberately limb-swing-scale
+  (a few m/s); genuine breathing-rate chest-wall motion is orders of magnitude smaller
+  (mm/s-scale) and would be invisible at this system's velocity resolution — detecting it would
+  need either much longer observation times or a different (phase-based, not FFT-peak-based)
+  extraction technique than the one used here.

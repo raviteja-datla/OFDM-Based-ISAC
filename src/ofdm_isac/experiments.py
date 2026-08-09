@@ -114,6 +114,62 @@ def run_trajectory_demo(cfg: SystemConfig, rng: np.random.Generator) -> dict:
     }
 
 
+def run_micro_doppler_demo(cfg: SystemConfig, rng: np.random.Generator) -> dict:
+    """A stationary target (fixed range, zero net translation) whose instantaneous
+    velocity oscillates: v(t) = bulk + amplitude*sin(2*pi*freq*t) -- e.g. a repeated
+    gesture or limb swing. Each frame's constant-velocity assumption stays valid since
+    micro-motion frequencies (~1-2 Hz) are far slower than one frame's duration (~ms).
+
+    Rather than collapsing each frame down to a single (R_hat, v_hat) like
+    run_trajectory_demo, this keeps the *entire* per-frame Doppler profile (the FFT
+    magnitude across the velocity axis, at the target's fixed range bin) and stacks
+    those profiles across frames -- that stack (velocity axis vs. frame time) is a
+    micro-Doppler spectrogram, built from nothing more than what range_doppler_map
+    already computes per frame.
+
+    Closes the loop the same way the rest of this project verifies its own claims: a
+    second, slower FFT across the recovered per-frame velocity estimates should recover
+    the oscillation frequency itself -- this is literally the real technique (a second,
+    slow-time FFT), not a simplification of it.
+    """
+    frame_times_s = np.arange(cfg.micro_doppler_n_frames) * cfg.frame_duration_s
+    true_velocities_mps = cfg.micro_doppler_bulk_velocity_mps + cfg.micro_doppler_amplitude_mps * np.sin(
+        2 * np.pi * cfg.micro_doppler_freq_hz * frame_times_s
+    )
+
+    range_axis, velocity_axis = range_doppler_axes(cfg)
+    range_bin = int(np.argmin(np.abs(range_axis - cfg.micro_doppler_range_m)))
+
+    spectrogram = np.empty((cfg.micro_doppler_n_frames, cfg.n_symbols))
+    est_velocities_mps = np.empty(cfg.micro_doppler_n_frames)
+
+    for i, velocity_mps in enumerate(true_velocities_mps):
+        target = Target(cfg.micro_doppler_range_m, velocity_mps, cfg.target_amplitude)
+        _, tx_grid = _fresh_tx_grid(cfg, rng)
+        rx_grid = apply_channel(tx_grid, cfg, [target], cfg.micro_doppler_snr_db, rng)
+        rd_map = range_doppler_map(estimate_channel(rx_grid, tx_grid))
+        doppler_profile = np.abs(rd_map[range_bin, :])
+        spectrogram[i, :] = doppler_profile
+        est_velocities_mps[i] = velocity_axis[np.argmax(doppler_profile)]
+
+    detrended = est_velocities_mps - est_velocities_mps.mean()
+    freqs_hz = np.fft.rfftfreq(cfg.micro_doppler_n_frames, d=cfg.frame_duration_s)
+    spectrum = np.abs(np.fft.rfft(detrended))
+    peak_bin = 1 + int(np.argmax(spectrum[1:]))  # skip the DC bin (freqs_hz[0] == 0)
+    est_oscillation_freq_hz = float(freqs_hz[peak_bin])
+
+    return {
+        "frame_times_s": frame_times_s,
+        "velocity_axis": velocity_axis,
+        "spectrogram": spectrogram,
+        "true_velocities_mps": true_velocities_mps,
+        "est_velocities_mps": est_velocities_mps,
+        "true_oscillation_freq_hz": cfg.micro_doppler_freq_hz,
+        "est_oscillation_freq_hz": est_oscillation_freq_hz,
+        "snr_db": cfg.micro_doppler_snr_db,
+    }
+
+
 def run_rmse_vs_snr(cfg: SystemConfig) -> dict:
     rng = np.random.default_rng(cfg.rng_seed + 1)
     target = _demo_target(cfg)

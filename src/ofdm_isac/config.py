@@ -55,6 +55,17 @@ class SystemConfig:
     trajectory_n_frames: int = 200
     trajectory_snr_db: float = 20.0
 
+    # --- Micro-Doppler demo: a stationary body with purely oscillatory instantaneous
+    # velocity (e.g. a repeated gesture or limb swing, no net translation) -- reveals the
+    # oscillation as a wavy trace in a Doppler-vs-slow-time spectrogram, the same mechanism
+    # behind gesture/gait sensing (including the WiFi-sensing case this was modeled on) ---
+    micro_doppler_range_m: float = 200.0
+    micro_doppler_bulk_velocity_mps: float = 0.0
+    micro_doppler_amplitude_mps: float = 3.0
+    micro_doppler_freq_hz: float = 1.5
+    micro_doppler_n_frames: int = 600
+    micro_doppler_snr_db: float = 20.0
+
     # --- SNR sweeps ---
     snr_db_sweep: tuple = (-10, -5, 0, 5, 10, 15, 20, 25, 30)
     # Lower range for the RMSE sweep: the range-Doppler FFT's coherent processing gain
@@ -93,6 +104,10 @@ class SystemConfig:
         )
         self._check_unambiguous(self.trajectory_start_range_m, self.trajectory_velocity_mps, "trajectory start")
         self._check_unambiguous(trajectory_end_range_m, self.trajectory_velocity_mps, "trajectory end")
+        micro_doppler_peak_velocity_mps = (
+            abs(self.micro_doppler_bulk_velocity_mps) + abs(self.micro_doppler_amplitude_mps)
+        )
+        self._check_unambiguous(self.micro_doppler_range_m, micro_doppler_peak_velocity_mps, "micro_doppler")
 
     # --- Derived quantities ---
     @property

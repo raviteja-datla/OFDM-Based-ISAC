@@ -171,6 +171,33 @@ def plot_trajectory(result: dict, cfg: SystemConfig, save_path: Path) -> None:
     _save_and_close(fig, save_path)
 
 
+def plot_micro_doppler_spectrogram(result: dict, cfg: SystemConfig, save_path: Path) -> None:
+    """Velocity axis vs. frame time, colored by per-frame Doppler-profile magnitude: a
+    stationary body's oscillating micro-motion (e.g. a repeated gesture) traces out a
+    wavy band instead of a single steady line, the classic micro-Doppler signature."""
+    t_ms = result["frame_times_s"] * 1e3
+    spec_db = magnitude_db(result["spectrogram"]).T  # (n_symbols, n_frames) for pcolormesh
+
+    fig, ax = plt.subplots(figsize=(10, 5))
+    mesh = ax.pcolormesh(t_ms, result["velocity_axis"], spec_db, shading="auto", cmap="viridis")
+    fig.colorbar(mesh, ax=ax, label="Magnitude (dB)")
+
+    ax.plot(
+        t_ms, result["true_velocities_mps"],
+        color="white", linewidth=1, linestyle="--", label="True instantaneous velocity",
+    )
+
+    ax.set_xlabel("Time (ms)")
+    ax.set_ylabel("Velocity (m/s)")
+    ax.set_title(
+        f"Micro-Doppler Spectrogram  (true {result['true_oscillation_freq_hz']:.2f} Hz vs. "
+        f"recovered {result['est_oscillation_freq_hz']:.2f} Hz, "
+        f"±{cfg.micro_doppler_amplitude_mps:.1f} m/s, SNR={result['snr_db']:.0f} dB)"
+    )
+    ax.legend(loc="upper right", framealpha=0.9)
+    _save_and_close(fig, save_path)
+
+
 def plot_rmse_vs_snr(result: dict, cfg: SystemConfig, save_path: Path) -> None:
     fig, axes = plt.subplots(1, 2, figsize=(11, 4.5))
 

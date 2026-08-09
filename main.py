@@ -53,6 +53,16 @@ def main() -> None:
     )
     plotting.plot_trajectory(trajectory, cfg, results_dir / "trajectory_tracking.png")
 
+    micro_doppler = experiments.run_micro_doppler_demo(cfg, rng)
+    print(
+        f"Micro-Doppler: {cfg.micro_doppler_n_frames} frames | "
+        f"true oscillation {micro_doppler['true_oscillation_freq_hz']:.2f} Hz | "
+        f"recovered from spectrogram: {micro_doppler['est_oscillation_freq_hz']:.2f} Hz"
+    )
+    plotting.plot_micro_doppler_spectrogram(
+        micro_doppler, cfg, results_dir / "micro_doppler_spectrogram.png"
+    )
+
     print("Running RMSE-vs-SNR sweep...")
     rmse_results = experiments.run_rmse_vs_snr(cfg)
     plotting.plot_rmse_vs_snr(rmse_results, cfg, results_dir / "rmse_vs_snr.png")

@@ -82,6 +82,38 @@ def run_multi_target_demo(cfg: SystemConfig, rng: np.random.Generator) -> dict:
     }
 
 
+def run_trajectory_demo(cfg: SystemConfig, rng: np.random.Generator) -> dict:
+    """Track a single constant-velocity target across cfg.trajectory_n_frames consecutive
+    OFDM frames. Each frame is one independent range-Doppler snapshot -- a real system
+    would emit one frame every frame_duration_s and re-run sensing each time -- and the
+    target's true range advances between frames according to its constant velocity
+    (R(t) = R0 + v*t). Unlike run_rmse_vs_snr/run_ber_vs_snr, H genuinely differs every
+    iteration here (the range changes), so there's nothing to hoist out of the loop."""
+    frame_times_s = np.arange(cfg.trajectory_n_frames) * cfg.frame_duration_s
+    true_ranges_m = cfg.trajectory_start_range_m + cfg.trajectory_velocity_mps * frame_times_s
+
+    est_ranges_m = np.empty(cfg.trajectory_n_frames)
+    est_velocities_mps = np.empty(cfg.trajectory_n_frames)
+
+    for i, range_m in enumerate(true_ranges_m):
+        target = Target(range_m, cfg.trajectory_velocity_mps, cfg.target_amplitude)
+        _, tx_grid = _fresh_tx_grid(cfg, rng)
+        rx_grid = apply_channel(tx_grid, cfg, [target], cfg.trajectory_snr_db, rng)
+        rd_map = range_doppler_map(estimate_channel(rx_grid, tx_grid))
+        r_hat, v_hat, _ = find_peak(rd_map, cfg)
+        est_ranges_m[i] = r_hat
+        est_velocities_mps[i] = v_hat
+
+    return {
+        "frame_times_s": frame_times_s,
+        "true_ranges_m": true_ranges_m,
+        "true_velocity_mps": cfg.trajectory_velocity_mps,
+        "est_ranges_m": est_ranges_m,
+        "est_velocities_mps": est_velocities_mps,
+        "snr_db": cfg.trajectory_snr_db,
+    }
+
+
 def run_rmse_vs_snr(cfg: SystemConfig) -> dict:
     rng = np.random.default_rng(cfg.rng_seed + 1)
     target = _demo_target(cfg)

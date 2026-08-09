@@ -18,7 +18,7 @@ def main() -> None:
         f"Max unambiguous range: {cfg.max_unambiguous_range_m:.0f} m"
     )
     print(
-        f"Observation time: {cfg.n_symbols * cfg.symbol_duration_total_s * 1e3:.2f} ms | "
+        f"Observation time: {cfg.frame_duration_s * 1e3:.2f} ms | "
         f"Velocity resolution: {cfg.velocity_resolution_mps:.2f} m/s | "
         f"Max unambiguous velocity: ±{cfg.max_unambiguous_velocity_mps:.1f} m/s"
     )
@@ -40,6 +40,18 @@ def main() -> None:
         f"{len(multi_target['true_targets'])} true target(s) -> {multi_target['detections']}"
     )
     plotting.plot_multi_target_map(multi_target, cfg, results_dir / "multi_target_map.png")
+
+    trajectory = experiments.run_trajectory_demo(cfg, rng)
+    range_track_rmse = float(np.sqrt(np.mean((trajectory["est_ranges_m"] - trajectory["true_ranges_m"]) ** 2)))
+    velocity_track_rmse = float(
+        np.sqrt(np.mean((trajectory["est_velocities_mps"] - trajectory["true_velocity_mps"]) ** 2))
+    )
+    print(
+        f"Trajectory tracking: {cfg.trajectory_n_frames} frames over "
+        f"{trajectory['frame_times_s'][-1] * 1e3:.0f} ms | "
+        f"range track RMSE: {range_track_rmse:.2f} m | velocity track RMSE: {velocity_track_rmse:.2f} m/s"
+    )
+    plotting.plot_trajectory(trajectory, cfg, results_dir / "trajectory_tracking.png")
 
     print("Running RMSE-vs-SNR sweep...")
     rmse_results = experiments.run_rmse_vs_snr(cfg)

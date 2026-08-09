@@ -48,6 +48,13 @@ class SystemConfig:
     # to suppress that. At 1e-6, expected false alarms drop to ~0.065 per scan.
     cfar_pfa: float = 1e-6
 
+    # --- Trajectory tracking demo: one constant-velocity target observed across many
+    # consecutive frames, to show motion over time rather than a single static snapshot ---
+    trajectory_start_range_m: float = 100.0
+    trajectory_velocity_mps: float = 50.0
+    trajectory_n_frames: int = 200
+    trajectory_snr_db: float = 20.0
+
     # --- SNR sweeps ---
     snr_db_sweep: tuple = (-10, -5, 0, 5, 10, 15, 20, 25, 30)
     # Lower range for the RMSE sweep: the range-Doppler FFT's coherent processing gain
@@ -80,6 +87,12 @@ class SystemConfig:
         self._check_unambiguous(self.target_range_m, self.target_velocity_mps, "target_range_m/target_velocity_mps")
         for range_m, velocity_mps, _amplitude in self.demo_targets:
             self._check_unambiguous(range_m, velocity_mps, "demo_targets")
+        trajectory_end_range_m = (
+            self.trajectory_start_range_m
+            + self.trajectory_velocity_mps * self.trajectory_n_frames * self.frame_duration_s
+        )
+        self._check_unambiguous(self.trajectory_start_range_m, self.trajectory_velocity_mps, "trajectory start")
+        self._check_unambiguous(trajectory_end_range_m, self.trajectory_velocity_mps, "trajectory end")
 
     # --- Derived quantities ---
     @property
@@ -103,6 +116,13 @@ class SystemConfig:
         return self.symbol_duration_useful_s + self.cp_duration_s
 
     @property
+    def frame_duration_s(self) -> float:
+        """Wall-clock duration of one full OFDM frame (n_symbols columns) -- the
+        observation time used for both velocity resolution and inter-frame spacing
+        in the trajectory-tracking demo."""
+        return self.n_symbols * self.symbol_duration_total_s
+
+    @property
     def wavelength_m(self) -> float:
         return C / self.carrier_freq_hz
 
@@ -122,7 +142,7 @@ class SystemConfig:
     @property
     def velocity_resolution_mps(self) -> float:
         """Delta v = lambda / (2 * T_obs): finer with more OFDM symbols observed."""
-        return self.wavelength_m / (2 * self.n_symbols * self.symbol_duration_total_s)
+        return self.wavelength_m / (2 * self.frame_duration_s)
 
     @property
     def max_unambiguous_velocity_mps(self) -> float:

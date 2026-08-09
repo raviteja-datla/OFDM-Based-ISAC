@@ -114,11 +114,13 @@ this has to be a separate grid, not the sensing grid reused)
 
 **5. Orchestration — [`experiments.py`](src/ofdm_isac/experiments.py)** repeats steps 1–4 under
 different conditions: once for the single validation run (`run_single_validation`), once with
-`demo_targets` + CFAR for the multi-target demo (`run_multi_target_demo`), and `n_monte_carlo`
+`demo_targets` + CFAR for the multi-target demo (`run_multi_target_demo`), once across
+`trajectory_n_frames` consecutive frames for the trajectory-tracking demo
+(`run_trajectory_demo` — see §5's `trajectory_tracking.png` section), and `n_monte_carlo`
 times per SNR point for the RMSE and BER sweeps (`run_rmse_vs_snr`, `run_ber_vs_snr`).
 
 **6. Plotting — [`plotting.py`](src/ofdm_isac/plotting.py)** turns each experiment's returned
-dict into one of the five PNGs in `results/`.
+dict into one of the six PNGs in `results/`.
 
 **7. [`main.py`](main.py)** sequences all of the above in order and prints the derived
 numbers plus a couple of headline results to the console.
@@ -143,7 +145,7 @@ src/ofdm_isac/
                      single-target peak detection + multi-target CA-CFAR detection
   comms_rx.py      equalization, QAM demod, BER, theoretical AWGN BER curve
   experiments.py   the Monte Carlo experiments (validation run, multi-target demo,
-                     RMSE sweep, BER sweep)
+                     trajectory-tracking demo, RMSE sweep, BER sweep)
   plotting.py      the deliverable figures
 ```
 
@@ -169,8 +171,9 @@ python main.py
 ```
 
 This prints the system's derived numbers (bandwidth, range/velocity resolution, unambiguous
-limits), runs the single-target validation pass, the multi-target CFAR demo, then two Monte
-Carlo sweeps, and saves five PNGs to `results/`. Takes about 30 seconds.
+limits), runs the single-target validation pass, the multi-target CFAR demo, the trajectory-
+tracking demo, then two Monte Carlo sweeps, and saves six PNGs to `results/`. Takes about 30
+seconds.
 
 ---
 
@@ -232,6 +235,26 @@ one, deliberately given a smaller reflection amplitude) are still detected clean
 threshold/false-alarm tradeoff — not "can you see a bright spot," but "how do you draw a
 principled line between signal and noise" — is the actual hard problem in radar detection.
 
+### `trajectory_tracking.png` — watching a target actually move
+
+Every plot above is a single snapshot: one OFDM frame, one moment in time. Real targets move
+between observations, so `main.py` also runs `experiments.run_trajectory_demo`: one target at a
+constant velocity (`SystemConfig.trajectory_velocity_mps`), observed across
+`trajectory_n_frames` (200, by default) separate, independent OFDM frames spaced
+`frame_duration_s` apart, with the target's true range advancing between frames
+(`R(t) = R0 + v·t`). Each frame runs through the exact same per-frame pipeline as every other
+plot here — nothing new algorithmically, just repeated over time and plotted as a track instead
+of a single point.
+
+Two things to notice in the result: the **range track is a visible staircase**, not a smooth
+line — each flat plateau is the estimate sitting in one range bin (`ΔR ≈ 9.76 m`) before jumping
+to the next as the target physically crosses that boundary, a direct, visual demonstration of
+range quantization that's easy to miss in a single static snapshot. The **velocity track stays
+essentially flat and accurate throughout** (RMSE well under `Δv`), because velocity here is
+genuinely constant — a non-constant real target (accelerating, or with body-part-level
+micro-motion, like a person's gait) would show up as texture on top of this track, which this
+project doesn't model (see §8).
+
 ### `rmse_vs_snr.png`
 Two subplots: range estimation RMSE and velocity estimation RMSE, each swept over SNR, each with
 a horizontal dashed line marking the theoretical resolution (`ΔR`, `Δv`). This sweep uses a much
@@ -283,6 +306,14 @@ combinations raise `ValueError` at construction time (`__post_init__`), not part
 |---|---|---|
 | `demo_targets` | 3 targets at (150 m, 15 m/s), (350 m, −25 m/s), (450 m, 40 m/s), with amplitudes 1.0, 0.6, 0.35 | Each `(range_m, velocity_mps, amplitude)` tuple is validated the same way as the single-target scenario. Add/remove tuples freely to change the scene. Keep targets separated by more than roughly `(2·guard_cells + 1)` resolution bins on each axis (see CFAR row below) or CA-CFAR's connected-component step will merge two real targets into a single detection. |
 | `multi_target_snr_db` | 15 dB | Lower this to see the weakest target (amplitude 0.35) approach the CFAR detection threshold and eventually get missed — a direct, hands-on view of the detection-probability side of the CFAR tradeoff described next. |
+
+### Trajectory-tracking demo — drives `trajectory_tracking.png`
+
+| Field | Default | Notes |
+|---|---|---|
+| `trajectory_start_range_m`, `trajectory_velocity_mps` | 100 m, 50 m/s | The start position and (constant) velocity. Both the start *and* end-of-trajectory range (`start + velocity × n_frames × frame_duration_s`) are validated against `max_unambiguous_range_m`/`max_unambiguous_velocity_mps` — a trajectory that would drift past the unambiguous range partway through is rejected at construction time, not partway through a run. |
+| `trajectory_n_frames` | 200 | How many independent frames to track across. More frames → longer observed trajectory (`n_frames × frame_duration_s`) and more visible range-bin transitions in the plot; linearly more runtime (one full sensing pipeline pass per frame). |
+| `trajectory_snr_db` | 20 dB | SNR for every frame in the sweep. Lower it to see the per-frame range/velocity scatter widen around the true track — the single-frame analog of the RMSE-vs-SNR sweep, but visualized as a track instead of an aggregate statistic. |
 
 ### CA-CFAR detector — drives what counts as a "detection" in `cfar_detect_2d`
 
@@ -354,3 +385,8 @@ and look at the output —
   is bin-quantization-limited as a result.
 - **Angle of arrival.** Everything here is single-antenna, so range and radial velocity are all
   that's recoverable — no bearing/direction, which would need a receive antenna array.
+- **Micro-Doppler / non-constant motion.** `trajectory_tracking.png` (§5) tracks a single
+  constant-velocity target across frames — real motion (acceleration, or body-part-level
+  micro-motion like gait or breathing, the actual mechanism behind WiFi/radar human sensing)
+  would need a non-constant velocity model and a second, slower FFT across many frames
+  (a spectrogram) to reveal it, neither of which this project builds.

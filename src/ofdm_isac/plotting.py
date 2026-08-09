@@ -139,6 +139,38 @@ def plot_sensing_pipeline(result: dict, cfg: SystemConfig, save_path: Path) -> N
     _save_and_close(fig, save_path)
 
 
+def plot_trajectory(result: dict, cfg: SystemConfig, save_path: Path) -> None:
+    """Range and velocity tracks over time for a moving target: the true (constant-
+    velocity) trajectory as a line, per-frame estimates as scattered points on top.
+    Range should show a visible staircase as the target crosses resolution bins;
+    velocity should stay flat and close to the true (constant) value throughout."""
+    t_ms = result["frame_times_s"] * 1e3
+
+    fig, axes = plt.subplots(1, 2, figsize=(11, 4.5))
+
+    axes[0].plot(t_ms, result["true_ranges_m"], color="gray", linewidth=2, label="True trajectory")
+    axes[0].scatter(t_ms, result["est_ranges_m"], s=20, color="tab:blue", label="Per-frame estimate")
+    axes[0].set_xlabel("Time (ms)")
+    axes[0].set_ylabel("Range (m)")
+    axes[0].set_title("Range Track")
+    axes[0].legend()
+    axes[0].grid(True, alpha=0.3)
+
+    axes[1].axhline(result["true_velocity_mps"], color="gray", linewidth=2, label="True trajectory")
+    axes[1].scatter(t_ms, result["est_velocities_mps"], s=20, color="tab:orange", label="Per-frame estimate")
+    axes[1].set_xlabel("Time (ms)")
+    axes[1].set_ylabel("Velocity (m/s)")
+    axes[1].set_title("Velocity Track")
+    axes[1].legend()
+    axes[1].grid(True, alpha=0.3)
+
+    fig.suptitle(
+        f"Target Tracking Over Time  (SNR={result['snr_db']:.0f} dB, "
+        f"{len(result['frame_times_s'])} frames)"
+    )
+    _save_and_close(fig, save_path)
+
+
 def plot_rmse_vs_snr(result: dict, cfg: SystemConfig, save_path: Path) -> None:
     fig, axes = plt.subplots(1, 2, figsize=(11, 4.5))
 

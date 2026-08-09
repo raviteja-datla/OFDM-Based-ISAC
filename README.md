@@ -83,8 +83,8 @@ Numbers below use the default config: 512 subcarriers, 128 OFDM symbols, 16-QAM,
 - `symbols_to_resource_grid(symbols, N, M)` → reshapes into the `(512, 128)` `Tx` grid, one OFDM
   symbol per column.
 - `ifft_time_domain` + `add_cyclic_prefix` also exist here and build the literal time-domain
-  waveform a real transmitter would send, but sit off the main pipeline's critical path (see
-  §8) — the frequency-domain grid is what everything downstream actually uses.
+  waveform a real transmitter would send, but sit off the main pipeline's critical path — the
+  frequency-domain grid is what everything downstream actually uses.
 
 **2. Simulate the reflection — [`channel.py`](src/ofdm_isac/channel.py)**
 - `build_channel_matrix(cfg, target)` computes `τ = 2R/c`, `f_D = 2v·f_c/c`, then the `(512, 128)`
@@ -318,7 +318,7 @@ combinations raise `ValueError` at construction time (`__post_init__`), not part
 | `subcarrier_spacing_hz` (`Δf`) | 30 kHz | Wider spacing → more bandwidth for a fixed `n_subcarriers` (`B = N·Δf`) → finer range resolution, **but** also *shrinks* `max_unambiguous_range_m = c/(2Δf)` — the two move in opposite directions from this one knob. |
 | `n_subcarriers` (`N`) | 512 | More subcarriers → more bandwidth (finer range resolution) **without** shrinking unambiguous range (unlike `Δf`) — this is the "free" way to improve range resolution. Also more bits per OFDM symbol (higher comms throughput) and a larger range-Doppler map (more compute: the 2D FFT is `O(N log N · M)`). |
 | `n_symbols` (`M`) | 128 | More symbols → longer observation time → finer velocity resolution (`Δv = λ/(2·M·T_sym)`), and more coherent processing gain for detection (roughly `10·log10(N·M)` dB — see the RMSE-sweep note in §5). Linear cost in runtime and bits transmitted. |
-| `cp_len` | 64 | Cyclic prefix length, samples. Must be `< n_subcarriers` (enforced). Not used by the frequency-domain sensing/comms pipeline at all — it only matters if you exercise `ofdm_tx.ifft_time_domain`/`add_cyclic_prefix` directly (§8), where in a real system it would need to exceed the expected multipath delay spread. |
+| `cp_len` | 64 | Cyclic prefix length, samples. Must be `< n_subcarriers` (enforced). Not used by the frequency-domain sensing/comms pipeline at all — it only matters if you exercise `ofdm_tx.ifft_time_domain`/`add_cyclic_prefix` directly, where in a real system it would need to exceed the expected multipath delay spread. |
 | `carrier_freq_hz` (`f_c`) | 28 GHz | Sets wavelength `λ = c/f_c`, which sets **both** velocity resolution and unambiguous velocity (`Δv` and `v_max` both scale with `λ`). Lower carrier (e.g. sub-6 GHz) → coarser velocity resolution but tolerates much faster targets before aliasing; mmWave (here) → the opposite. Classic radar-band tradeoff, not free either direction. |
 | `qam_order` | 16 | Bits per symbol = `log2(qam_order)`. Higher order (64, 256-QAM) → more comms throughput, but constellation points pack closer together → worse BER at the same SNR. Must be a perfect square (`4, 16, 64, 256, ...`) — enforced, since I/Q are modulated as two independent PAM dimensions. |
 
@@ -379,61 +379,53 @@ unambiguous velocity.
 
 ---
 
-## 7. Interview-prep notes
+## 7. Issues faced during development
 
-**"What determines your range resolution?"**
-Total signal bandwidth: `ΔR = c / (2B)`. More bandwidth = a shorter effective pulse = finer
-delay resolution. In this project, `B = n_subcarriers × subcarrier_spacing_hz` — either knob
-widens the bandwidth and directly sharpens `ΔR` (see `SystemConfig.range_resolution_m`).
+None of these were caught by reading the code back over — each one showed up as something
+concrete looking wrong in an actual run (a bad number, a broken-looking plot, a statistically
+implausible result), and got traced back to its cause from there.
 
-**"What determines your velocity resolution?"**
-Total observation time (equivalently, the number of OFDM symbols fed into the Doppler FFT):
-`Δv = λ / (2·T_obs)`. Watching the target for longer lets you resolve smaller frequency (Doppler)
-shifts, the same way a longer time window sharpens frequency resolution in any FFT. See
-`SystemConfig.velocity_resolution_mps`.
+**Circular equalization gave a fake zero BER.** The original plan was to reuse one grid's own
+`Rx/Tx` division as both the sensing channel estimate *and* the comms equalizer. Read literally,
+that's circular: `equalized = Rx / (Rx/Tx) = Tx` exactly, regardless of noise, so BER vs. SNR
+would have been zero at every single SNR point — a completely fake result that would have looked
+fine until someone (or an interviewer) asked why noise didn't matter. The fix: generate two
+independent resource grids through the same physical target — a reference/pilot grid whose
+`Rx/Tx` supplies both the range-Doppler input *and* the channel estimate, and a separate data
+grid with fresh random bits, equalized using that reference's estimate and compared against its
+own known bits for BER. See `experiments.run_ber_vs_snr` and the docstring on
+`comms_rx.zero_force_equalize`.
 
-**"Why is OFDM convenient for radar?"**
-An OFDM receiver already estimates the per-subcarrier channel response as a normal part of
-equalization for communications. That per-subcarrier, per-symbol channel estimate *is* exactly
-the `H_hat = Rx/Tx` grid the sensing pipeline needs — so full radar processing (range-Doppler
-map, target detection) is close to free on top of a receiver you'd be running anyway, rather than
-needing separate hardware or a dedicated pulse/waveform.
+**Spectral leakage smeared a cross through the range-Doppler peak.** The first version of
+`range_doppler_map.png` showed a target's true peak correctly located, but with a faint, full-
+width bright line running through it in both directions — because the target's true range/
+velocity essentially never land exactly on a bin, and a rectangular (unwindowed) FFT's sidelobes
+decay very slowly (a Dirichlet kernel), showing up as a "picket fence" across the whole axis.
+Fixed by Hann-windowing both axes before the FFT/IFFT in `sensing.range_doppler_map` — trades a
+~1.5× wider main lobe for roughly 18 dB better sidelobe suppression.
 
-**Bonus, from building this:** two things that aren't obvious until you actually implement it
-and look at the output —
-- *Spectral leakage.* A real target essentially never lands exactly on a range/Doppler bin
-  boundary, so an unwindowed FFT smears a faint cross of sidelobes through the peak. Windowing
-  (Hann here) trades a ~1.5× wider main lobe for far better sidelobe suppression.
-  See `sensing.range_doppler_map`.
-- *Circular equalization.* If you naively equalize a data grid using the channel estimate derived
-  from that *same* grid's own `Rx/Tx`, you recover the transmitted symbols exactly regardless of
-  noise — BER vs. SNR would trivially be zero everywhere. This project uses an independent
-  reference/pilot grid for the channel estimate and a separate data grid for the actual BER
-  measurement, mirroring how a real pilot-then-data frame works. See `experiments.run_ber_vs_snr`
-  and the docstring on `comms_rx.zero_force_equalize`.
+**`BER = 0` broke the log-scale BER plot.** At high SNR, Monte Carlo trials sometimes produced
+*zero* observed bit errors, and `0` can't be plotted on a `semilogy` axis (`log10(0) = -inf`),
+which showed up as the plotted line plunging off the bottom of the frame instead of leveling
+off. The deeper issue: "zero errors in N simulated bits" doesn't mean the true BER is zero, only
+that it's below the detectable floor of `1/N` for that many bits. Fixed by clipping those points
+to that Monte Carlo detection floor and marking them as explicit upper bounds (open triangle
+markers) rather than plotting them as measured values — see `plotting.plot_ber_vs_snr`.
 
----
+**The RMSE-vs-SNR sweep was uninformatively flat.** The first version swept the same −10 to
+30 dB range used for the BER plot, and range/velocity RMSE came out completely flat — sitting
+right at the resolution floor at every single SNR point, with no visible trend. The cause: the
+range-Doppler FFT is a coherent sum over `n_subcarriers × n_symbols` samples (~65,536 here),
+giving roughly 48 dB of processing gain, so peak detection was already essentially perfect even
+at the sweep's lowest tested SNR. Fixed by adding a second, much lower dedicated sweep range
+(−50 to −10 dB, `rmse_snr_db_sweep`) just for this experiment, which reveals the real cliff where
+detection actually breaks down (see `experiments.run_rmse_vs_snr`).
 
-## 8. What's not built (yet)
-
-- **Time-domain Tx chain.** `ofdm_tx.ifft_time_domain` / `add_cyclic_prefix` build the actual
-  time-domain OFDM waveform for chain completeness, but the main pipeline applies the channel
-  directly to the frequency-domain resource grid (the standard, simpler OFDM-radar formulation)
-  rather than propagating a continuous-time signal.
-- **Sub-bin interpolation.** Both `find_peak` and `cfar_detect_2d` report the strongest whole
-  bin, not a parabolic/sinc-interpolated sub-bin estimate — the RMSE floor in `rmse_vs_snr.png`
-  is bin-quantization-limited as a result.
-- **Angle of arrival.** Everything here is single-antenna, so range and radial velocity are all
-  that's recoverable — no bearing/direction, which would need a receive antenna array.
-- **Multi-scatterer bodies and acceleration.** `micro_doppler_spectrogram.png` models one point
-  target with a single sinusoidal velocity component. A real body's micro-Doppler signature
-  comes from *multiple* scattering points (torso + swinging limbs) moving at different rates
-  simultaneously (a real gait spectrogram shows several superimposed oscillations, not one),
-  and a real trajectory can accelerate rather than move at constant velocity — both would be
-  straightforward extensions of the existing `Target` superposition (§2 step 2) and per-frame
-  velocity model already in place, just not built here.
-- **Breathing-scale motion.** `micro_doppler_amplitude_mps` is deliberately limb-swing-scale
-  (a few m/s); genuine breathing-rate chest-wall motion is orders of magnitude smaller
-  (mm/s-scale) and would be invisible at this system's velocity resolution — detecting it would
-  need either much longer observation times or a different (phase-based, not FFT-peak-based)
-  extraction technique than the one used here.
+**CFAR's default false-alarm rate produced real false alarms.** The first version of the
+multi-target demo used `Pfa = 1e-4` and reliably returned 9–10 detections for 3 true targets —
+not a bug in the detector, but exactly what that `Pfa` predicts: with ~65,536 cells in the map,
+`65536 × 1e-4 ≈ 6.5` false alarms are *expected* from noise alone per scan, and the extra
+detections' peak magnitudes (~−9 dB, far below the three real targets' 27–34 dB) confirmed they
+were noise, not a broken algorithm. Fixed by dropping to `Pfa = 1e-6` (real radar systems pick it
+this low for exactly this reason), which brought expected false alarms down to ~0.065/scan while
+still cleanly detecting all three real targets, including the deliberately weak one.

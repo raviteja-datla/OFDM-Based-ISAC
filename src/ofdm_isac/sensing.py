@@ -16,9 +16,6 @@ from .config import SystemConfig
 
 
 def magnitude_db(x: np.ndarray) -> np.ndarray:
-    """20*log10(|x|), with a floor so log10(0) never happens. Shared by sensing (peak
-    magnitude reporting) and plotting (heatmap color scale) so the formula and epsilon
-    can't drift apart between the two."""
     return 20 * np.log10(np.abs(x) + 1e-12)
 
 

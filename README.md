@@ -114,15 +114,17 @@ this has to be a separate grid, not the sensing grid reused)
 
 **5. Orchestration — [`experiments.py`](src/ofdm_isac/experiments.py)** repeats steps 1–4 under
 different conditions: once for the single validation run (`run_single_validation`), once with
-`demo_targets` + CFAR for the multi-target demo (`run_multi_target_demo`), once across
-`trajectory_n_frames` consecutive frames for the trajectory-tracking demo
-(`run_trajectory_demo` — see §5's `trajectory_tracking.png` section), once across
-`micro_doppler_n_frames` frames for the micro-Doppler demo (`run_micro_doppler_demo` — see
-§5's `micro_doppler_spectrogram.png` section), and `n_monte_carlo` times per SNR point for the
-RMSE and BER sweeps (`run_rmse_vs_snr`, `run_ber_vs_snr`).
+`demo_targets` + CFAR for the multi-target demo (`run_multi_target_demo`), once with two receive
+antennas for the angle-of-arrival demo (`run_angle_of_arrival_demo` — see §5's
+`angle_of_arrival.png` section), once across `trajectory_n_frames` consecutive frames for the
+trajectory-tracking demo (`run_trajectory_demo` — see §5's `trajectory_tracking.png` section),
+once across `micro_doppler_n_frames` frames for the micro-Doppler demo
+(`run_micro_doppler_demo` — see §5's `micro_doppler_spectrogram.png` section), and
+`n_monte_carlo` times per SNR point for the RMSE and BER sweeps (`run_rmse_vs_snr`,
+`run_ber_vs_snr`).
 
 **6. Plotting — [`plotting.py`](src/ofdm_isac/plotting.py)** turns each experiment's returned
-dict into one of the seven PNGs in `results/`.
+dict into one of the eight PNGs in `results/`.
 
 **7. [`main.py`](main.py)** sequences all of the above in order and prints the derived
 numbers plus a couple of headline results to the console.
@@ -142,12 +144,14 @@ results/                        generated PNGs (gitignored, created by main.py)
 src/ofdm_isac/
   config.py       SystemConfig — all system parameters + derived resolution/ambiguity limits
   ofdm_tx.py       bits -> Gray-coded QAM -> resource grid -> IFFT/CP (the Tx chain)
-  channel.py       Target + delay/Doppler phase-ramp channel model, AWGN
+  channel.py       Target + delay/Doppler phase-ramp channel model, AWGN,
+                     two-antenna geometry + carrier-phase factor for angle-of-arrival
   sensing.py       Rx/Tx division -> windowed 2D FFT/IFFT -> range-Doppler map ->
                      single-target peak detection + multi-target CA-CFAR detection
   comms_rx.py      equalization, QAM demod, BER, theoretical AWGN BER curve
   experiments.py   the Monte Carlo experiments (validation run, multi-target demo,
-                     trajectory-tracking demo, micro-Doppler demo, RMSE sweep, BER sweep)
+                     angle-of-arrival demo, trajectory-tracking demo, micro-Doppler
+                     demo, RMSE sweep, BER sweep)
   plotting.py      the deliverable figures
 ```
 
@@ -173,9 +177,9 @@ python main.py
 ```
 
 This prints the system's derived numbers (bandwidth, range/velocity resolution, unambiguous
-limits), runs the single-target validation pass, the multi-target CFAR demo, the trajectory-
-tracking demo, the micro-Doppler demo, then two Monte Carlo sweeps, and saves seven PNGs to
-`results/`. Takes about 35 seconds.
+limits), runs the single-target validation pass, the multi-target CFAR demo, the angle-of-arrival
+demo, the trajectory-tracking demo, the micro-Doppler demo, then two Monte Carlo sweeps, and
+saves eight PNGs to `results/`. Takes about 35 seconds.
 
 ---
 
@@ -236,6 +240,37 @@ down to about 0.065 expected false alarms, and the three real targets (including
 one, deliberately given a smaller reflection amplitude) are still detected cleanly. This
 threshold/false-alarm tradeoff — not "can you see a bright spot," but "how do you draw a
 principled line between signal and noise" — is the actual hard problem in radar detection.
+
+### `angle_of_arrival.png` — recovering bearing, not just range/velocity
+
+Everything above uses one antenna, and a single antenna genuinely cannot tell you *what
+direction* a target is in — only how far and how fast. `experiments.run_angle_of_arrival_demo`
+adds a second receive antenna (`SystemConfig.aoa_antenna_spacing_m`, fixed at the standard
+half-wavelength spacing) and recovers the target's bearing from the *phase difference* between
+the two antennas' copies of the same reflection.
+
+The geometry is exact, not the textbook far-field approximation: `channel.two_antenna_effective_ranges`
+computes each antenna's real Pythagorean distance to the target from actual 2D positions, given
+one shared transmitter at the array's phase center (so the outbound leg is common to both
+receive channels, and only the inbound leg differs by antenna position). The approximation
+`d·sin(θ)` falls out on its own once range is much larger than antenna spacing (always true
+here — meters vs. millimeters), rather than being assumed upfront.
+
+The subtler piece: `channel.build_channel_matrix` deliberately omits the absolute
+carrier-frequency phase term (`exp(-j·2π·f_c·τ)`) — a legitimate, standard baseband
+simplification for everything else in this project, since single-antenna range comes from the
+far coarser subcarrier-spacing ramp instead, and that constant carrier phase is otherwise
+unobservable. But it's *exactly* what two-antenna interferometry needs, since carrier-scale
+phase is far more sensitive than the subcarrier ramp to the millimeter-scale path difference
+between antennas. `channel.carrier_phase_factor` adds it back in, for this demo only, without
+touching the channel model everything else relies on. This mirrors why carrier-phase GPS/RTK
+positioning differences two receivers' carrier phase for millimeter-level relative accuracy
+rather than trusting either receiver's absolute phase alone — the huge, practically unusable
+absolute term cancels in the difference, leaving only the small, physically meaningful one.
+
+The plot itself is a compass, not a heatmap — with only two antennas there's no beamforming
+image to draw (that needs a real array), just one bearing number, so drawing it as a heatmap
+would misrepresent what was actually measured.
 
 ### `trajectory_tracking.png` — watching a target actually move
 
@@ -336,6 +371,15 @@ combinations raise `ValueError` at construction time (`__post_init__`), not part
 | `demo_targets` | 3 targets at (150 m, 15 m/s), (350 m, −25 m/s), (450 m, 40 m/s), with amplitudes 1.0, 0.6, 0.35 | Each `(range_m, velocity_mps, amplitude)` tuple is validated the same way as the single-target scenario. Add/remove tuples freely to change the scene. Keep targets separated by more than roughly `(2·guard_cells + 1)` resolution bins on each axis (see CFAR row below) or CA-CFAR's connected-component step will merge two real targets into a single detection. |
 | `multi_target_snr_db` | 15 dB | Lower this to see the weakest target (amplitude 0.35) approach the CFAR detection threshold and eventually get missed — a direct, hands-on view of the detection-probability side of the CFAR tradeoff described next. |
 
+### Angle-of-arrival demo — drives `angle_of_arrival.png`
+
+| Field | Default | Notes |
+|---|---|---|
+| `aoa_target_range_m`, `aoa_target_angle_deg` | 200 m, 25° | Bearing is measured from broadside (straight ahead = 0°); must stay strictly within `(-90°, 90°)` (enforced) — beyond that the geometry stops making sense for a 2-element array on this baseline. |
+| `aoa_target_velocity_mps` | 0.0 m/s | Kept at 0 by default so the target's range stays exactly fixed, isolating the angle measurement cleanly; a nonzero value works fine too (Doppler processing is untouched by any of this). |
+| `aoa_antenna_spacing_m` | derived: `wavelength_m / 2` (≈5.35 mm at the default 28 GHz) | Not independently configurable — it's the standard half-wavelength spacing, the largest baseline that stays unambiguous across the full ±90° field of view. Wider spacing would alias (multiple angles would produce the same measured phase difference, the angular version of the range/velocity ambiguity limits above); it updates automatically if `carrier_freq_hz` changes. |
+| `aoa_snr_db` | 20 dB | Lower it to see the estimated bearing drift away from the true one — phase noise directly corrupts the angle estimate, since the whole technique depends on measuring phase precisely. |
+
 ### Trajectory-tracking demo — drives `trajectory_tracking.png`
 
 | Field | Default | Notes |
@@ -381,9 +425,10 @@ unambiguous velocity.
 
 ## 7. Issues faced during development
 
-None of these were caught by reading the code back over — each one showed up as something
+Almost none of these were caught by reading the code back over — most showed up as something
 concrete looking wrong in an actual run (a bad number, a broken-looking plot, a statistically
-implausible result), and got traced back to its cause from there.
+implausible result), and got traced back to its cause from there. The one exception is noted
+below: a hand-derivation catch, before any code ran.
 
 **Circular equalization gave a fake zero BER.** The original plan was to reuse one grid's own
 `Rx/Tx` division as both the sensing channel estimate *and* the comms equalizer. Read literally,
@@ -429,3 +474,21 @@ detections' peak magnitudes (~−9 dB, far below the three real targets' 27–34
 were noise, not a broken algorithm. Fixed by dropping to `Pfa = 1e-6` (real radar systems pick it
 this low for exactly this reason), which brought expected false alarms down to ~0.065/scan while
 still cleanly detecting all three real targets, including the deliberately weak one.
+
+**Angle-of-arrival would have been silently wrong by a missing term and a factor of two.**
+Unlike the others above, this one was never actually run wrong — it got caught during the math
+derivation, before writing any code, by cross-checking the expected phase difference two
+different ways and finding they disagreed by exactly 2×. The initial plan was to feed each
+antenna's own geometric distance straight into the existing round-trip delay formula
+(`τ_i = 2·R_i/c`, i.e. treating each antenna as if it were also the transmitter). That's wrong
+for this setup — there's one shared transmitter and two *receive* antennas, so only the *inbound*
+leg of the round trip differs by antenna position; the outbound leg is common to both and has to
+be included once, not doubled per antenna. Separately, `channel.build_channel_matrix`'s existing
+delay term uses subcarrier spacing (`Δf`, tens of kHz), which is far too coarse to carry the
+millimeter-scale phase difference this technique depends on — real interferometry needs the
+*carrier-frequency* phase term (`Δf` is ~28 GHz/30 kHz ≈ a million times too insensitive), which
+is legitimately absent from the existing model since nothing else in this project needs it. Fixed
+by computing each antenna's true geometric distance and averaging it with the shared outbound
+leg (`channel.two_antenna_effective_ranges`), and adding the missing carrier-phase term back in
+as new, separate code (`channel.carrier_phase_factor`) used only by this demo — see
+`angle_of_arrival.png`'s section above for the full derivation.

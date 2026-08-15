@@ -25,9 +25,6 @@ def _save_and_close(fig: plt.Figure, save_path: Path) -> None:
 
 
 def _draw_range_doppler_heatmap(fig, ax, range_axis: np.ndarray, velocity_axis: np.ndarray, mag_db: np.ndarray):
-    """Shared by every range-Doppler panel (single-target, multi-target, and the
-    4th panel of the pipeline walkthrough) so the heatmap's look only needs
-    updating in one place."""
     mesh = ax.pcolormesh(velocity_axis, range_axis, mag_db, shading="auto", cmap="viridis")
     fig.colorbar(mesh, ax=ax, label="Magnitude (dB)")
     ax.set_xlabel("Velocity (m/s)")
@@ -38,8 +35,7 @@ def _draw_range_doppler_heatmap(fig, ax, range_axis: np.ndarray, velocity_axis: 
 def _scatter_true_and_estimated(
     ax, true_v, true_r, est_v, est_r, true_label: str, est_label: str, legend_fontsize: int | None = None
 ) -> None:
-    """Shared true-target/estimate marker styling. true_v/true_r/est_v/est_r accept
-    either a scalar (single target) or an array-like (multiple targets/detections)."""
+
     ax.scatter(
         true_v, true_r,
         marker="o", s=140, facecolors="none", edgecolors="white", linewidths=2,
@@ -93,13 +89,6 @@ def plot_multi_target_map(result: dict, cfg: SystemConfig, save_path: Path) -> N
 
 
 def plot_sensing_pipeline(result: dict, cfg: SystemConfig, save_path: Path) -> None:
-    """Four-panel walkthrough of *how* sensing works, not just its final output:
-    |Tx| and |Rx| look almost identical (the channel here is a pure phase rotation,
-    not an amplitude change), so the target is invisible in magnitude alone. Only
-    after dividing (H_hat = Rx/Tx) and looking at *phase* does the delay/Doppler
-    ramp -- the target's actual signature -- become visible, which the final FFT
-    panel then collapses into a single detectable peak.
-    """
     tx_grid = result["tx_grid_ref"]
     rx_grid = result["rx_grid_ref"]
     phase_h = np.angle(result["h_hat"])
@@ -118,11 +107,18 @@ def plot_sensing_pipeline(result: dict, cfg: SystemConfig, save_path: Path) -> N
         ax.set_ylabel("Subcarrier index")
         fig.colorbar(im, ax=ax, label="Magnitude")
 
-    im_phase = axes[1, 0].pcolormesh(phase_h, cmap="twilight", vmin=-np.pi, vmax=np.pi, shading="auto")
-    axes[1, 0].set_title("3. Phase of $\\hat{H} = Rx / Tx$\n(the target's signature)")
+    # Raw wrapped phase (values folded into (-pi, pi]) plotted on a cyclic colormap makes a
+    # monotonic ramp look like an oscillating wave -- both ends of the wrap (+pi and -pi) map
+    # to similar-looking colors, so the eye reads "climb, reset, climb" as "up, down, up." The
+    # ramp this panel is meant to demonstrate (sec. 5's derivation) is genuinely monotonic, so
+    # unwrap it back into a continuous line (undoing the +-2*pi jumps) and use a sequential
+    # colormap, where no two phase values share a color and the illusion can't occur.
+    phase_unwrapped = np.unwrap(np.unwrap(phase_h, axis=0), axis=1)
+    im_phase = axes[1, 0].pcolormesh(phase_unwrapped, cmap="viridis", shading="auto")
+    axes[1, 0].set_title("3. Unwrapped phase of $\\hat{H} = Rx / Tx$\n(a ramp, not a wave)")
     axes[1, 0].set_xlabel("OFDM symbol index")
     axes[1, 0].set_ylabel("Subcarrier index")
-    fig.colorbar(im_phase, ax=axes[1, 0], label="Phase (rad)")
+    fig.colorbar(im_phase, ax=axes[1, 0], label="Unwrapped phase (rad)")
 
     _draw_range_doppler_heatmap(
         fig, axes[1, 1], result["range_axis"], result["velocity_axis"], magnitude_db(result["rd_map"])
@@ -140,10 +136,6 @@ def plot_sensing_pipeline(result: dict, cfg: SystemConfig, save_path: Path) -> N
 
 
 def plot_trajectory(result: dict, cfg: SystemConfig, save_path: Path) -> None:
-    """Range and velocity tracks over time for a moving target: the true (constant-
-    velocity) trajectory as a line, per-frame estimates as scattered points on top.
-    Range should show a visible staircase as the target crosses resolution bins;
-    velocity should stay flat and close to the true (constant) value throughout."""
     t_ms = result["frame_times_s"] * 1e3
 
     fig, axes = plt.subplots(1, 2, figsize=(11, 4.5))
@@ -172,9 +164,6 @@ def plot_trajectory(result: dict, cfg: SystemConfig, save_path: Path) -> None:
 
 
 def plot_micro_doppler_spectrogram(result: dict, cfg: SystemConfig, save_path: Path) -> None:
-    """Velocity axis vs. frame time, colored by per-frame Doppler-profile magnitude: a
-    stationary body's oscillating micro-motion (e.g. a repeated gesture) traces out a
-    wavy band instead of a single steady line, the classic micro-Doppler signature."""
     t_ms = result["frame_times_s"] * 1e3
     spec_db = magnitude_db(result["spectrogram"]).T  # (n_symbols, n_frames) for pcolormesh
 
@@ -195,6 +184,51 @@ def plot_micro_doppler_spectrogram(result: dict, cfg: SystemConfig, save_path: P
         f"±{cfg.micro_doppler_amplitude_mps:.1f} m/s, SNR={result['snr_db']:.0f} dB)"
     )
     ax.legend(loc="upper right", framealpha=0.9)
+    _save_and_close(fig, save_path)
+
+
+def plot_angle_of_arrival(result: dict, cfg: SystemConfig, save_path: Path) -> None:
+    fig, ax = plt.subplots(figsize=(6.5, 6))
+
+    theta = np.linspace(-np.pi / 2, np.pi / 2, 200)
+    ax.plot(np.sin(theta), np.cos(theta), color="0.6", linewidth=1, alpha=0.6)
+    for deg in (-90, -45, 0, 45, 90):
+        rad = np.radians(deg)
+        ax.plot(
+            [0.96 * np.sin(rad), np.sin(rad)], [0.96 * np.cos(rad), np.cos(rad)],
+            color="0.6", linewidth=1,
+        )
+        ax.text(1.1 * np.sin(rad), 1.1 * np.cos(rad), f"{deg}°", ha="center", va="center",
+                 fontsize=9, color="0.4")
+
+    true_rad = np.radians(result["angle_true_deg"])
+    est_rad = np.radians(result["angle_hat_deg"])
+    ax.plot(
+        [0, np.sin(true_rad)], [0, np.cos(true_rad)],
+        color="0.3", linestyle="--", linewidth=2.5,
+        label=f"True bearing ({result['angle_true_deg']:.1f}°)",
+    )
+    ax.plot(
+        [0, np.sin(est_rad)], [0, np.cos(est_rad)],
+        color="tab:blue", linewidth=2,
+        label=f"Estimated bearing ({result['angle_hat_deg']:.1f}°)",
+    )
+
+    ax.scatter([-0.05, 0.05], [-0.05, -0.05], marker="s", s=70, color="black", zorder=3)
+    ax.annotate(
+        f"2-antenna array (d = {result['antenna_spacing_m'] * 1e3:.2f} mm)",
+        xy=(0, -0.05), xytext=(0, -0.24), ha="center", fontsize=9, color="0.3",
+    )
+
+    ax.set_xlim(-1.3, 1.3)
+    ax.set_ylim(-0.35, 1.22)
+    ax.set_aspect("equal")
+    ax.axis("off")
+    ax.legend(loc="upper left", framealpha=0.9)
+    ax.set_title(
+        f"Angle of Arrival  (R̂={result['r_hat']:.1f} m, v̂={result['v_hat']:.1f} m/s, "
+        f"SNR={result['snr_db']:.0f} dB)"
+    )
     _save_and_close(fig, save_path)
 
 
@@ -223,10 +257,6 @@ def plot_rmse_vs_snr(result: dict, cfg: SystemConfig, save_path: Path) -> None:
 
 
 def plot_ber_vs_snr(result: dict, cfg: SystemConfig, save_path: Path) -> None:
-    """Points with zero observed bit errors are clipped to the Monte Carlo detection
-    floor (1/total_bits_per_point) and marked as upper bounds, not measured values --
-    BER=0 doesn't plot on a log axis and doesn't mean the true BER is zero, only that
-    no error occurred within the bits simulated at that SNR."""
     fig, ax = plt.subplots(figsize=(7, 5))
 
     floor = 1.0 / result["total_bits_per_point"]

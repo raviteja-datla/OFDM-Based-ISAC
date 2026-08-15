@@ -34,6 +34,31 @@ def build_channel_matrix(cfg: SystemConfig, target: Target) -> np.ndarray:
     return target.amplitude * delay_ramp * doppler_ramp
 
 
+def two_antenna_effective_ranges(
+    range_m: float, angle_rad: float, antenna_spacing_m: float
+) -> tuple[float, float]:
+    """Exact geometry for a 2-element receive array (elements at +-spacing/2 along the
+    baseline) plus a single co-located transmitter at the array's phase center: the
+    reflection's outbound leg (transmitter -> target, distance range_m) is common to both
+    receive channels, and only the inbound leg (target -> antenna_i) differs by antenna
+    position -- no far-field approximation, just literal Pythagorean distance, which
+    reduces to the textbook d*sin(angle) approximation on its own once range_m is much
+    larger than antenna_spacing_m (always true here: meters vs. millimeters).
+    """
+    target_x = range_m * np.sin(angle_rad)
+    target_y = range_m * np.cos(angle_rad)
+    inbound_0 = np.hypot(target_x + antenna_spacing_m / 2, target_y)
+    inbound_1 = np.hypot(target_x - antenna_spacing_m / 2, target_y)
+    return float((range_m + inbound_0) / 2), float((range_m + inbound_1) / 2)
+
+
+def carrier_phase_factor(cfg: SystemConfig, effective_range_m: float) -> complex:
+    """The absolute carrier-frequency phase exp(-j*2*pi*f_c*tau), tau = 2*range_m/c.
+    """
+    tau = 2 * effective_range_m / C
+    return complex(np.exp(-1j * 2 * np.pi * cfg.carrier_freq_hz * tau))
+
+
 def apply_precomputed_channel(
     tx_grid: np.ndarray,
     h_total: np.ndarray,

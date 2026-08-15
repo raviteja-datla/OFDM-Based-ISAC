@@ -6,7 +6,14 @@ noise draws, per the "avoid circular equalization" design (see comms_rx.py).
 """
 import numpy as np
 
-from .channel import Target, apply_channel, apply_precomputed_channel, build_channel_matrix
+from .channel import (
+    Target,
+    apply_channel,
+    apply_precomputed_channel,
+    build_channel_matrix,
+    carrier_phase_factor,
+    two_antenna_effective_ranges,
+)
 from .comms_rx import compute_ber, qam_demod, theoretical_ber_awgn, zero_force_equalize
 from .config import SystemConfig
 from .ofdm_tx import generate_bits, qam_mod, resource_grid_to_symbols, symbols_to_resource_grid
@@ -167,6 +174,55 @@ def run_micro_doppler_demo(cfg: SystemConfig, rng: np.random.Generator) -> dict:
         "true_oscillation_freq_hz": cfg.micro_doppler_freq_hz,
         "est_oscillation_freq_hz": est_oscillation_freq_hz,
         "snr_db": cfg.micro_doppler_snr_db,
+    }
+
+
+def run_angle_of_arrival_demo(cfg: SystemConfig, rng: np.random.Generator) -> dict:
+    """Two receive antennas, one shared transmitter: the same reflection reaches each
+    antenna over a very slightly different physical path (real geometry, see
+    channel.two_antenna_effective_ranges), and the resulting *carrier-phase* difference
+    between the two antennas' copies of the same detected peak reveals the target's
+    bearing -- angle information a single antenna cannot recover at all, since
+    sensing.range_doppler_map (run independently, unmodified, per antenna) only ever
+    resolves range/velocity, never direction.
+    """
+    angle_true_rad = np.radians(cfg.aoa_target_angle_deg)
+    eff_ranges = two_antenna_effective_ranges(
+        cfg.aoa_target_range_m, angle_true_rad, cfg.aoa_antenna_spacing_m
+    )
+
+    _, tx_grid = _fresh_tx_grid(cfg, rng)
+    signal_power = abs(cfg.target_amplitude) ** 2
+
+    rd_maps = []
+    for eff_range_m in eff_ranges:
+        target = Target(eff_range_m, cfg.aoa_target_velocity_mps, cfg.target_amplitude)
+        h_total = build_channel_matrix(cfg, target) * carrier_phase_factor(cfg, eff_range_m)
+        rx_grid = apply_precomputed_channel(tx_grid, h_total, signal_power, cfg.aoa_snr_db, rng)
+        rd_maps.append(range_doppler_map(estimate_channel(rx_grid, tx_grid)))
+
+    rd_map_0, rd_map_1 = rd_maps
+    magnitude_0 = np.abs(rd_map_0)
+    idx = np.unravel_index(np.argmax(magnitude_0), magnitude_0.shape)
+    peak_0, peak_1 = rd_map_0[idx], rd_map_1[idx]
+
+    range_axis, velocity_axis = range_doppler_axes(cfg)
+    r_hat, v_hat = float(range_axis[idx[0]]), float(velocity_axis[idx[1]])
+
+    delta_phi = np.angle(peak_1) - np.angle(peak_0)
+    delta_phi = (delta_phi + np.pi) % (2 * np.pi) - np.pi  # wrap to (-pi, pi]
+    sin_angle = np.clip(
+        delta_phi * cfg.wavelength_m / (2 * np.pi * cfg.aoa_antenna_spacing_m), -1.0, 1.0
+    )
+    angle_hat_deg = float(np.degrees(np.arcsin(sin_angle)))
+
+    return {
+        "r_hat": r_hat,
+        "v_hat": v_hat,
+        "angle_true_deg": cfg.aoa_target_angle_deg,
+        "angle_hat_deg": angle_hat_deg,
+        "antenna_spacing_m": cfg.aoa_antenna_spacing_m,
+        "snr_db": cfg.aoa_snr_db,
     }
 
 

@@ -12,13 +12,6 @@ def generate_bits(n_bits: int, rng: np.random.Generator) -> np.ndarray:
 
 
 def qam_constellation(order: int) -> tuple[np.ndarray, np.ndarray]:
-    """Per-dimension PAM levels and a Gray-codeword -> binary-index lookup table.
-
-    levels[i] is the PAM value assigned to binary index i (unit average symbol
-    energy after scaling). gray_decode_table[g] gives the binary index i whose
-    Gray codeword equals g, so a received Gray codeword can be decoded to an
-    index and looked up in `levels` directly.
-    """
     sqrt_m = int(round(np.sqrt(order)))
     indices = np.arange(sqrt_m)
 

@@ -41,6 +41,14 @@ def main() -> None:
     )
     plotting.plot_multi_target_map(multi_target, cfg, results_dir / "multi_target_map.png")
 
+    aoa = experiments.run_angle_of_arrival_demo(cfg, rng)
+    print(
+        f"Angle of arrival: true {aoa['angle_true_deg']:.1f}° | "
+        f"estimated {aoa['angle_hat_deg']:.1f}° | "
+        f"antenna spacing {aoa['antenna_spacing_m'] * 1e3:.2f} mm"
+    )
+    plotting.plot_angle_of_arrival(aoa, cfg, results_dir / "angle_of_arrival.png")
+
     trajectory = experiments.run_trajectory_demo(cfg, rng)
     range_track_rmse = float(np.sqrt(np.mean((trajectory["est_ranges_m"] - trajectory["true_ranges_m"]) ** 2)))
     velocity_track_rmse = float(

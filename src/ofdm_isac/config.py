@@ -66,6 +66,15 @@ class SystemConfig:
     micro_doppler_n_frames: int = 600
     micro_doppler_snr_db: float = 20.0
 
+    # --- Angle-of-arrival demo: two receive antennas at the standard half-wavelength
+    # spacing, recovering bearing -- something a single antenna cannot do at all -- from
+    # the carrier-phase difference between the two antennas' copies of the same
+    # reflection (see channel.carrier_phase_factor) ---
+    aoa_target_range_m: float = 200.0
+    aoa_target_angle_deg: float = 25.0
+    aoa_target_velocity_mps: float = 0.0
+    aoa_snr_db: float = 20.0
+
     # --- SNR sweeps ---
     snr_db_sweep: tuple = (-10, -5, 0, 5, 10, 15, 20, 25, 30)
     # Lower range for the RMSE sweep: the range-Doppler FFT's coherent processing gain
@@ -108,6 +117,9 @@ class SystemConfig:
             abs(self.micro_doppler_bulk_velocity_mps) + abs(self.micro_doppler_amplitude_mps)
         )
         self._check_unambiguous(self.micro_doppler_range_m, micro_doppler_peak_velocity_mps, "micro_doppler")
+        if not (-90.0 < self.aoa_target_angle_deg < 90.0):
+            raise ValueError(f"aoa_target_angle_deg={self.aoa_target_angle_deg} must be within (-90, 90)")
+        self._check_unambiguous(self.aoa_target_range_m, self.aoa_target_velocity_mps, "aoa_target")
 
     # --- Derived quantities ---
     @property
@@ -140,6 +152,13 @@ class SystemConfig:
     @property
     def wavelength_m(self) -> float:
         return C / self.carrier_freq_hz
+
+    @property
+    def aoa_antenna_spacing_m(self) -> float:
+        """Half-wavelength spacing: the largest receive-array baseline that stays
+        unambiguous across the full +-90 degree field of view (a wider baseline aliases
+        -- the angular analog of the range/velocity ambiguity limits below)."""
+        return self.wavelength_m / 2
 
     @property
     def bits_per_symbol(self) -> int:

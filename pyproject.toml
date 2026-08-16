@@ -6,12 +6,20 @@ build-backend = "setuptools.build_meta"
 name = "ofdm-isac"
 version = "0.1.0"
 description = "OFDM-based Integrated Sensing and Communication simulation"
+readme = "README.md"
 requires-python = ">=3.10"
+license = "MIT"
+authors = [
+    { name = "Raviteja Datla", email = "ravitejadatla03@gmail.com" },
+]
 dependencies = [
     "numpy",
     "scipy",
     "matplotlib",
 ]
+
+[project.urls]
+Repository = "https://github.com/raviteja-datla/OFDM-Based-ISAC"
 
 [tool.setuptools.packages.find]
 where = ["src"]
